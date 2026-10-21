@@ -143,7 +143,9 @@ def finalise(gdf: gpd.GeoDataFrame, year: int, source: str) -> gpd.GeoDataFrame:
     gdf["label_text"] = gdf.area_ha.map(lambda a: f"{a:.1f} ha")
     if "first_day" in gdf:
         gdf["first_alert"] = [doy_to_date(year, d) for d in gdf.first_day]
-    for col in ("z_min", "z_mean", "scenes_mean"):
+    if "clearcut" in gdf:
+        gdf["clearcut"] = gdf["clearcut"].astype("Int64")
+    for col in ("z_min", "z_mean", "scenes_mean", "dvh_rel"):
         if col in gdf:
             gdf[col] = gdf[col].astype(float).round(2)
     if "label" in gdf:
@@ -157,7 +159,7 @@ def finalise(gdf: gpd.GeoDataFrame, year: int, source: str) -> gpd.GeoDataFrame:
     gdf["lx"], gdf["ly"] = pts.x.round(6), pts.y.round(6)
     keep = ["id", "year", "area_ha", "label_text", "lx", "ly", "zone", "zone_share",
             "ha_A", "ha_B", "ha_C", "ha_D", "first_alert", "z_min", "z_mean",
-            "scenes_mean", "validation", "source", "geometry"]
+            "scenes_mean", "dvh_rel", "clearcut", "validation", "source", "geometry"]
     return gdf[[c for c in keep if c in gdf.columns]]
 
 
@@ -185,6 +187,9 @@ def year_summary(gdf: gpd.GeoDataFrame, year: int, source: str) -> dict:
         "by_zone_ha": {zc: round(float(gdf[f"ha_{zc}"].sum()), 1) for zc in "ABCD"},
         "by_zone_n": {zc: int((gdf.zone == zc).sum()) for zc in "ABCD"},
     }
+    if "clearcut" in gdf:
+        cc = gdf[gdf.clearcut == 1]
+        s["clearcut"] = {"n_polygons": int(len(cc)), "total_ha": round(float(cc.area_ha.sum()), 1)}
     if "validation" in gdf:
         v = gdf.validation.value_counts()
         tp, fp = int(v.get("confirmed", 0)), int(v.get("false alarm", 0))

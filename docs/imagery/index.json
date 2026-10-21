@@ -1,0 +1,9 @@
+{
+  "true": {
+    "2024": {
+      "tiles": 506,
+      "mb": 2.3,
+      "source": "sentinel_2024.tif"
+    }
+  }
+}

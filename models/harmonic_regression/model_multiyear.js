@@ -16,6 +16,9 @@
 //   • forest mask is year-specific: WorldCover trees AND summer NDVI > 0.5
 //     in the year before Y, so a stand cut in 2020 can still be detected in 2020
 //   • optional: pixels already alerted in an earlier year are not re-reported
+// and one addition aimed at clear-cuts only:
+//   • every polygon gets a Sentinel-1 radar check (dvh_rel, clearcut = 0/1),
+//     because clear-cuts lose canopy structure while beetle-killed stands keep it
 // =============================================================================
 
 var YEARS        = [2020, 2021, 2022, 2023, 2024, 2025];
@@ -32,6 +35,7 @@ var CONFIG = {
   minPatchPx:       30,      // 30 px × 100 m² = 0.3 ha minimum polygon
   maxCloudPct:      50,
   excludePriorAlerts: true,  // don't re-report pixels alerted in an earlier year
+  clearcutCheck:    true,    // add Sentinel-1 ΔVH per polygon + clearcut flag (see S1 below)
   exportScale:      10,
   exportCRS:        'EPSG:32633',
   exportFolder:     'GEE_Sumava'
@@ -172,6 +176,69 @@ function detectYear(year) {
 }
 
 // -----------------------------------------------------------------------------
+// CLEAR-CUT CHECK — Sentinel-1 VH backscatter (radar sees structure, not colour)
+// A clear-cut removes the canopy volume → VH drops by several dB.
+// Bark-beetle dieback leaves stems and branches standing → VH changes little.
+// For every polygon: ΔVH = median(after) − median(before), same months, compared
+// per relative orbit (so the S1-B loss in Dec 2021 doesn't bias the difference),
+// then minus the ΔVH of a forest ring around the polygon (cancels moisture/season).
+// -----------------------------------------------------------------------------
+var S1 = {
+  months:      [6, 9],    // compare June–September of the year before vs the year after
+  ringM:       100,       // width of the reference ring around each polygon (m)
+  vhThreshold: -1.5,      // dvh_rel ≤ threshold (dB) → clearcut = 1  (tune with clearcut_filter_eval.js)
+  minScenes:   3          // per orbit and period
+};
+
+function s1Collection() {
+  return ee.ImageCollection('COPERNICUS/S1_GRD')
+    .filterBounds(aoi)
+    .filter(ee.Filter.eq('instrumentMode', 'IW'))
+    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+    .filter(ee.Filter.calendarRange(S1.months[0], S1.months[1], 'month'))
+    .select('VH');                                   // already in dB
+}
+
+function deltaVH(year) {
+  // after = same months of year+1 when it is complete, otherwise of the detection year itself
+  var now = new Date();
+  var postYear = (year + 1 < now.getFullYear() ||
+                  (year + 1 === now.getFullYear() && now.getMonth() + 1 > S1.months[1])) ? year + 1 : year;
+  var col  = s1Collection();
+  var pre  = col.filterDate((year - 1) + '-01-01', year + '-01-01');
+  var post = col.filterDate(postYear + '-01-01', (postYear + 1) + '-01-01');
+  var orbits = pre.aggregate_array('relativeOrbitNumber_start').distinct();
+  var diffs = orbits.map(function(o) {
+    var a = pre.filter(ee.Filter.eq('relativeOrbitNumber_start', o));
+    var b = post.filter(ee.Filter.eq('relativeOrbitNumber_start', o));
+    return ee.Algorithms.If(a.size().gte(S1.minScenes).and(b.size().gte(S1.minScenes)),
+      b.median().subtract(a.median()).rename('dVH'), null);
+  }, true);
+  return ee.ImageCollection.fromImages(diffs).mean().rename('dVH').set('post_year', postYear);
+}
+
+function addS1(fc, year) {
+  var dvh  = deltaVH(year);
+  var tree = ee.ImageCollection('ESA/WorldCover/v200').first().eq(10);
+  return fc.map(function(f) {
+    var g = f.geometry();
+    var ring = g.buffer(S1.ringM, 5).difference(g, 5);
+    var inPoly = dvh.reduceRegion({reducer: ee.Reducer.mean(), geometry: g, scale: 10, maxPixels: 1e8}).get('dVH');
+    var inRing = dvh.updateMask(tree).reduceRegion({reducer: ee.Reducer.mean(), geometry: ring, scale: 10, maxPixels: 1e8}).get('dVH');
+    var rel = ee.Algorithms.If(ee.Algorithms.IsEqual(inPoly, null), null,
+      ee.Number(inPoly).subtract(ee.Algorithms.If(ee.Algorithms.IsEqual(inRing, null), 0, inRing)));
+    return f.set({
+      dvh_poly: inPoly,
+      dvh_ring: inRing,
+      dvh_rel: rel,
+      clearcut: ee.Algorithms.If(ee.Algorithms.IsEqual(rel, null), null,
+        ee.Number(rel).lte(S1.vhThreshold).int()),
+      s1_post_year: dvh.get('post_year')
+    });
+  });
+}
+
+// -----------------------------------------------------------------------------
 // 6. Loop over years: optional prior-alert exclusion, patch filter, vectorise
 // -----------------------------------------------------------------------------
 var priorAlerts = ee.Image(0).selfMask(); // empty
@@ -220,6 +287,7 @@ YEARS.forEach(function(year) {
         method: 'harmonic_nbr'
       });
     });
+  if (CONFIG.clearcutCheck) { vectors = addS1(vectors, year); }
 
   Export.table.toDrive({
     collection: vectors,

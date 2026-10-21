@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
 <style>
 :root{
   --bg:#0f1714; --panel:#141f1b; --panel-2:#1b2823; --line:#2a3a33;
@@ -19,7 +20,41 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,system-ui,sans-serif}
-#map{position:absolute;inset:0 0 0 400px}
+#map,#map2,#stage{position:absolute;inset:0 0 0 400px}
+#map2{visibility:hidden}
+#stage{pointer-events:none}
+body.compare #map2{visibility:visible}
+
+/* floating imagery toolbar */
+#toolbar{position:absolute;top:12px;left:412px;right:60px;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;z-index:5;pointer-events:none}
+.tb{pointer-events:auto;background:rgba(20,31,27,.92);border:1px solid var(--line);border-radius:10px;padding:5px;display:flex;gap:3px;align-items:center;
+  box-shadow:0 4px 14px rgba(0,0,0,.35);backdrop-filter:blur(4px)}
+.tb .lbl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);padding:0 6px 0 4px;font-weight:600}
+.tb button{all:unset;cursor:pointer;padding:5px 9px;border-radius:7px;color:var(--ink-2);font-size:13px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tb button:hover:not(:disabled){color:var(--ink);background:var(--panel-2)}
+.tb button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.tb button:disabled{opacity:.3;cursor:not-allowed}
+.tb button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tb button.big{padding:6px 12px}
+.tb button.on{background:var(--accent);color:var(--accent-ink)}
+.tb .sep{width:1px;align-self:stretch;background:var(--line);margin:2px 4px}
+kbd{font:600 10px Inter,sans-serif;border:1px solid var(--ink-3);border-radius:3px;padding:0 4px;margin-left:6px;color:var(--ink-3)}
+.tb button.on kbd,.tb button[aria-pressed=true] kbd{border-color:currentColor;color:inherit}
+
+/* swipe compare */
+#swipe{position:absolute;top:0;bottom:0;width:0;left:50%;display:none;pointer-events:auto;z-index:4}
+body.compare #swipe{display:block}
+#swipe::before{content:"";position:absolute;top:0;bottom:0;left:-1.5px;width:3px;background:#fff;box-shadow:0 0 8px rgba(0,0,0,.5)}
+#swipe .handle{position:absolute;top:50%;left:-19px;width:38px;height:38px;margin-top:-19px;border-radius:50%;background:#fff;color:#0f1714;
+  display:grid;place-items:center;cursor:ew-resize;font-weight:700;box-shadow:0 2px 10px rgba(0,0,0,.45);touch-action:none;user-select:none}
+.side-tag{position:absolute;bottom:40px;display:none;background:rgba(20,31,27,.92);border:1px solid var(--line);border-radius:8px;padding:4px;gap:2px;pointer-events:auto;z-index:4}
+body.compare .side-tag{display:flex}
+#tag-left{left:12px} #tag-right{right:12px}
+.side-tag span{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);align-self:center;padding:0 6px;font-weight:600}
+.side-tag button{all:unset;cursor:pointer;padding:3px 7px;border-radius:6px;font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.side-tag button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.side-tag button:disabled{opacity:.3;cursor:not-allowed}
+body.compare #hint{display:none}
 aside{position:absolute;top:0;left:0;bottom:0;width:400px;background:var(--panel);border-right:1px solid var(--line);
   overflow-y:auto;padding:22px 22px 28px;display:flex;flex-direction:column;gap:20px}
 h1{font:600 26px/1.15 Fraunces,Georgia,serif;margin:0;letter-spacing:-.01em}
@@ -103,7 +138,11 @@ footer a{color:var(--ink-2)}
   padding:6px 10px;border-radius:8px;font-size:12px;color:var(--ink-2);pointer-events:none}
 
 @media (max-width:800px){
-  #map{inset:0 0 46vh 0}
+  #map,#map2,#stage{inset:0 0 46vh 0}
+  #toolbar{left:8px;right:52px;top:8px}
+  .tb .lbl,kbd{display:none}
+  .side-tag{max-width:calc(100% - 60px);overflow-x:auto;left:8px!important;right:auto!important}
+  #tag-left{bottom:68px} #tag-right{bottom:30px}
   aside{top:auto;width:100%;height:46vh;border-right:0;border-top:1px solid var(--line);padding:16px}
   h1{font-size:21px}
   #hint{display:none}
@@ -139,12 +178,10 @@ footer a{color:var(--ink-2)}
   <section>
     <h2>Map</h2>
     <div class="toggles">
-      <div class="seg" id="basemap">
-        <button data-b="sat" aria-pressed="true">Satellite</button>
-        <button data-b="map" aria-pressed="false">Map</button>
-      </div>
       <label class="toggle">Area labels <span class="switch"><input type="checkbox" id="t-labels" checked><span></span></span></label>
       <label class="toggle">Zone fill <span class="switch"><input type="checkbox" id="t-zonefill" checked><span></span></span></label>
+      <p class="note" style="margin:0 0 4px">Check a patch by eye: switch polygons off (<b>P</b>), pick a Sentinel-2 year in the bar above the map, or press <b>Compare</b> (<b>C</b>) to swipe between the year before and the year of detection. In <b>false colour</b> a fresh clear-cut is bright magenta; dead standing spruce stays dull brown-green.</p>
+      <label class="toggle" title="Hide polygons whose Sentinel-1 radar signal shows the canopy structure is still there">Clear-cuts only (radar check) <span class="switch"><input type="checkbox" id="t-clearcut" checked><span></span></span></label>
       <label class="toggle">Validated patches only <span class="switch"><input type="checkbox" id="t-validated"><span></span></span></label>
     </div>
   </section>
@@ -168,6 +205,24 @@ footer a{color:var(--ink-2)}
 </aside>
 
 <div id="map"></div>
+<div id="map2" aria-hidden="true"></div>
+<div id="stage">
+  <div id="swipe"><div class="handle" role="slider" aria-label="Swipe between images" tabindex="0">⇆</div></div>
+  <div class="side-tag" id="tag-left"><span>Left</span></div>
+  <div class="side-tag" id="tag-right"><span>Right</span></div>
+</div>
+<div id="toolbar">
+  <div class="tb">
+    <button class="big on" id="b-poly" aria-pressed="true" title="Show / hide polygons (P)">Polygons<kbd>P</kbd></button>
+    <button class="big" id="b-outline" aria-pressed="false" title="Outline only, so the image underneath stays visible (O)">Outline<kbd>O</kbd></button>
+    <button class="big" id="b-compare" aria-pressed="false" title="Swipe-compare two images (C)">Compare<kbd>C</kbd></button>
+  </div>
+  <div class="tb" id="tb-bg"><span class="lbl">Background</span></div>
+  <div class="tb" id="tb-color"><span class="lbl">Sentinel-2</span>
+    <button data-c="true" aria-pressed="true" title="Natural colour">True colour</button>
+    <button data-c="false" aria-pressed="false" title="SWIR2-NIR-Red: clear-cuts / bare soil appear magenta">False colour</button>
+  </div>
+</div>
 <div id="hint">Click a polygon for details</div>
 <script src="app.js"></script>
 </body>

@@ -13,6 +13,10 @@ The map uses only the non-ML part of the project (harmonic regression on Sentine
 3. **Build the web data**: `python scripts/build_site_data.py` – cleans and smooths polygons, clips to the park, splits area by zone, transfers the 2024 tp/fp validation labels and writes `docs/data/`.
 4. **Publish**: commit `docs/` and enable *Settings → Pages → Deploy from branch → `main` / `/docs`*.
 
+**Imagery for checking by eye.** `models/harmonic_regression/export_imagery.js` exports a late-summer Sentinel-2 composite per year (Cloud Score+ masked) in true colour and false colour (SWIR2-NIR-Red, where fresh clear-cuts are magenta). Put the GeoTIFFs in `data/imagery/` and run `python scripts/make_imagery_tiles.py`; each year becomes one PMTiles file in `docs/imagery/` (≈2–5 MB). On the map: switch polygons off (P), outline only (O), pick a year as background, or swipe-compare two years (C).
+
+**Clear-cuts vs dieback (Sentinel-1).** With `clearcutCheck: true`, every polygon gets `dvh_rel`: the change in VH radar backscatter (summer of the year before vs. summer after), minus the same change in a 100 m forest ring around it. A clear-cut removes canopy volume and VH drops; beetle-killed spruce left standing keeps most of its structure. Polygons with `dvh_rel ≤ −1.5 dB` get `clearcut = 1`. Calibrate the threshold first: upload `results/labeled_alerts_24.geojson` as an asset, run `clearcut_filter_eval.js`, then `python scripts/eval_clearcut_filter.py` for precision/recall per threshold and NP zone (zone A, where logging is not allowed, serves as a negative control).
+
 Changes compared to `model.js`, so years are comparable: a rolling 3-year archive before each detection year, a year-specific forest mask (WorldCover + NDVI of the previous summer), and pixels already alerted in an earlier year are not reported again.
 
 | File | Content |
